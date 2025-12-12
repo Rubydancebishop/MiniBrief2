@@ -98,10 +98,12 @@ function createSectionInstance(element, id) {
         targetBrightnessLeft: 0,
         brightnessHistoryRight: [],
         brightnessHistoryLeft: [],
-        currentPage: 0, // 0: main, 1: heatmap
+        currentPage: 0, // 0: main, 1: heatmap, 2: magnitude
         heatmapInstances: {},
         playStartTime: 0,
-        dataStartTime: 0
+        dataStartTime: 0,
+        magPlaySpeed: 1.0, // Magnitude view playback speed
+        magIsPlaying: false // Magnitude view playing state
     };
     
     sections.push(section);
@@ -214,6 +216,39 @@ function updateMovementBrightness(section, prevIndex) {
     if (section.dataLeft.length > 0) {
         let prevL = section.dataLeft[Math.min(prevIndex, section.dataLeft.length - 1)];
         let currL = section.dataLeft[Math.min(section.currentIndex, section.dataLeft.length - 1)];
+        
+        let dxL = Math.abs(currL.orientX - prevL.orientX);
+        let dyL = Math.abs(currL.orientY - prevL.orientY);
+        let dzL = Math.abs(currL.orientZ - prevL.orientZ);
+        totalChangeL = dxL + dyL + dzL;
+    }
+    
+    // Ignore small changes (noise/tremor threshold)
+    let threshold = 15;
+    if (totalChangeR > threshold) {
+        section.targetBrightnessRight = Math.min(255, section.targetBrightnessRight + (totalChangeR - threshold) * 15);
+    }
+    if (totalChangeL > threshold) {
+        section.targetBrightnessLeft = Math.min(255, section.targetBrightnessLeft + (totalChangeL - threshold) * 15);
+    }
+}
+
+// For magnitude view: calculate brightness for a specific frame transition
+function updateMovementBrightnessForFrame(section, fromIndex, toIndex) {
+    // Right hand
+    let prevR = section.dataRight[Math.min(fromIndex, section.dataRight.length - 1)];
+    let currR = section.dataRight[Math.min(toIndex, section.dataRight.length - 1)];
+    
+    let dxR = Math.abs(currR.orientX - prevR.orientX);
+    let dyR = Math.abs(currR.orientY - prevR.orientY);
+    let dzR = Math.abs(currR.orientZ - prevR.orientZ);
+    let totalChangeR = dxR + dyR + dzR;
+    
+    // Left hand
+    let totalChangeL = 0;
+    if (section.dataLeft.length > 0) {
+        let prevL = section.dataLeft[Math.min(fromIndex, section.dataLeft.length - 1)];
+        let currL = section.dataLeft[Math.min(toIndex, section.dataLeft.length - 1)];
         
         let dxL = Math.abs(currL.orientX - prevL.orientX);
         let dyL = Math.abs(currL.orientY - prevL.orientY);
@@ -494,6 +529,7 @@ function bindSectionEvents(section) {
     
     el.querySelector('.play-btn').addEventListener('click', () => {
         section.isPlaying = !section.isPlaying;
+        section.magIsPlaying = section.isPlaying; // Sync with Magnitude view
         if (section.isPlaying) {
             // Calculate playStartTime based on current frame position
             let currentFrameMs = timestampToMs(section.dataRight[section.currentIndex].timestamp);
@@ -502,13 +538,22 @@ function bindSectionEvents(section) {
             section.playStartTime = Date.now() - offsetMs;
         }
         el.querySelector('.play-btn').textContent = section.isPlaying ? 'Pause' : 'Play';
+        // Sync Magnitude play button
+        let magPlayBtn = el.querySelector('.mag-play-btn');
+        if (magPlayBtn) magPlayBtn.textContent = section.isPlaying ? '⏸' : '▶';
     });
     
     el.querySelector('.reset-btn').addEventListener('click', () => {
         section.currentIndex = 0;
         section.isPlaying = false;
+        section.magIsPlaying = false; // Sync with Magnitude view
         section.playStartTime = 0;
         el.querySelector('.play-btn').textContent = 'Play';
+        // Sync Magnitude play button and timeline
+        let magPlayBtn = el.querySelector('.mag-play-btn');
+        if (magPlayBtn) magPlayBtn.textContent = '▶';
+        let magTimeline = el.querySelector('.mag-timeline');
+        if (magTimeline) magTimeline.value = 0;
         updateSectionDisplay(section);
     });
     
@@ -743,26 +788,23 @@ function addNewSection() {
                 
                 <!-- Page 2: Magnitude View -->
                 <div class="section-page magnitude-view">
-                    <h4 class="magnitude-title">XYZ Magnitude Timeline</h4>
-                    <div class="magnitude-container">
-                        <div class="magnitude-panel magnitude-right">
-                            <h4>Right Hand</h4>
-                            <div class="magnitude-canvas"></div>
+                    <div class="magnitude-canvas-single"></div>
+                    <div class="magnitude-controls">
+                        <div class="mag-playback">
+                            <button class="mag-play-btn">▶</button>
+                            <input type="range" class="mag-timeline" min="0" max="100" value="0">
+                            <span class="mag-time">0:00</span>
                         </div>
-                        <div class="magnitude-panel magnitude-left">
-                            <h4>Left Hand</h4>
-                            <div class="magnitude-canvas"></div>
+                        <div class="mag-speed">
+                            <span class="mag-speed-label">Speed:</span>
+                            <input type="range" class="mag-speed-slider" min="0" max="4" step="1" value="2">
+                            <span class="mag-speed-val">1x</span>
                         </div>
                     </div>
                     <div class="magnitude-info">
                         <span class="mag-frame">Frame: <span class="mag-frame-num">0</span></span>
                         <span class="mag-right-val">R: <span class="mag-r">--</span></span>
                         <span class="mag-left-val">L: <span class="mag-l">--</span></span>
-                    </div>
-                    <div class="magnitude-legend">
-                        <span class="mag-low">Low</span>
-                        <div class="mag-gradient"></div>
-                        <span class="mag-high">High</span>
                     </div>
                 </div>
             </div>
@@ -815,69 +857,292 @@ function updateSectionPage(section) {
 function initMagnitudeView(section) {
     let el = section.element;
     
-    // Clear existing magnitude instances
-    if (section.magnitudeInstanceRight && section.magnitudeInstanceRight.remove) {
-        section.magnitudeInstanceRight.remove();
-    }
-    if (section.magnitudeInstanceLeft && section.magnitudeInstanceLeft.remove) {
-        section.magnitudeInstanceLeft.remove();
+    // Clear existing magnitude instance
+    if (section.magnitudeInstance && section.magnitudeInstance.remove) {
+        section.magnitudeInstance.remove();
     }
     
-    let rightContainer = el.querySelector('.magnitude-right .magnitude-canvas');
-    let leftContainer = el.querySelector('.magnitude-left .magnitude-canvas');
+    let container = el.querySelector('.magnitude-canvas-single');
     
-    if (rightContainer) {
-        rightContainer.innerHTML = '';
-        section.magnitudeInstanceRight = new p5(sketch => magnitudeSketch(sketch, section, 'right'), rightContainer);
+    if (container) {
+        container.innerHTML = '';
+        section.magnitudeInstance = new p5(sketch => magnitudeSketchCombined(sketch, section), container);
     }
     
-    if (leftContainer) {
-        leftContainer.innerHTML = '';
-        section.magnitudeInstanceLeft = new p5(sketch => magnitudeSketch(sketch, section, 'left'), leftContainer);
-    }
+    // Bind magnitude controls
+    bindMagnitudeControls(section);
 }
 
-function magnitudeSketch(p, section, hand) {
-    let canvasWidth = 300;
-    let canvasHeight = 300;
+function bindMagnitudeControls(section) {
+    let el = section.element;
+    let playBtn = el.querySelector('.mag-play-btn');
+    let timeline = el.querySelector('.mag-timeline');
+    let timeDisplay = el.querySelector('.mag-time');
+    let speedSlider = el.querySelector('.mag-speed-slider');
+    let speedVal = el.querySelector('.mag-speed-val');
+    
+    if (!playBtn || !timeline || !speedSlider) return;
+    
+    // Speed values: 0=0.25x, 1=0.5x, 2=1x, 3=2x, 4=4x
+    const speedValues = [0.25, 0.5, 1, 2, 4];
+    
+    // Update timeline max based on data length
+    let maxFrames = Math.max(section.dataRight.length, section.dataLeft.length) - 1;
+    timeline.max = maxFrames;
+    timeline.value = section.currentIndex;
+    
+    // Play/Pause button
+    playBtn.onclick = function() {
+        section.magIsPlaying = !section.magIsPlaying;
+        section.isPlaying = section.magIsPlaying; // Sync with Main view
+        playBtn.textContent = section.magIsPlaying ? '⏸' : '▶';
+        
+        if (section.magIsPlaying) {
+            // Calculate start time accounting for current position
+            let currentFrameMs = timestampToMs(section.dataRight[section.currentIndex].timestamp);
+            let firstFrameMs = timestampToMs(section.dataRight[0].timestamp);
+            let offsetMs = (currentFrameMs - firstFrameMs) / section.magPlaySpeed;
+            section.playStartTime = Date.now() - offsetMs;
+        }
+        // Sync Main view play button
+        let mainPlayBtn = section.element.querySelector('.play-btn');
+        if (mainPlayBtn) mainPlayBtn.textContent = section.isPlaying ? 'Pause' : 'Play';
+    };
+    
+    // Timeline slider
+    timeline.oninput = function() {
+        section.currentIndex = parseInt(this.value);
+        updateMagnitudeTimeDisplay(section);
+        
+        // Reset play start time if playing
+        if (section.magIsPlaying) {
+            let currentFrameMs = timestampToMs(section.dataRight[section.currentIndex].timestamp);
+            let firstFrameMs = timestampToMs(section.dataRight[0].timestamp);
+            let offsetMs = (currentFrameMs - firstFrameMs) / section.magPlaySpeed;
+            section.playStartTime = Date.now() - offsetMs;
+        }
+    };
+    
+    // Speed slider
+    speedSlider.oninput = function() {
+        let speedIndex = parseInt(this.value);
+        section.magPlaySpeed = speedValues[speedIndex];
+        speedVal.textContent = section.magPlaySpeed + 'x';
+        
+        // Recalculate play start time to maintain position
+        if (section.magIsPlaying) {
+            let currentFrameMs = timestampToMs(section.dataRight[section.currentIndex].timestamp);
+            let firstFrameMs = timestampToMs(section.dataRight[0].timestamp);
+            let offsetMs = (currentFrameMs - firstFrameMs) / section.magPlaySpeed;
+            section.playStartTime = Date.now() - offsetMs;
+        }
+    };
+    
+    // Initialize display
+    updateMagnitudeTimeDisplay(section);
+}
+
+function updateMagnitudeTimeDisplay(section) {
+    let el = section.element;
+    let timeDisplay = el.querySelector('.mag-time');
+    let timeline = el.querySelector('.mag-timeline');
+    
+    if (!timeDisplay || !timeline) return;
+    
+    let d = section.dataRight[Math.min(section.currentIndex, section.dataRight.length - 1)];
+    if (d && d.timestamp) {
+        // Extract minutes:seconds from timestamp
+        let parts = d.timestamp.split(':');
+        timeDisplay.textContent = parts[1] + ':' + parts[2].split('.')[0];
+    }
+    timeline.value = section.currentIndex;
+}
+
+function magnitudeSketchCombined(p, section) {
+    let canvasWidth, canvasHeight;
+    let parentEl;
+    
+    // Separate state for each hand
+    let currentCirclesRight = 0;
+    let currentCirclesLeft = 0;
+    let maxCircles = 100;
+    let circleSpacing = 5;
+    
+    // Trail history for afterimage effect (separate for each hand)
+    let trailHistoryRight = [];
+    let trailHistoryLeft = [];
+    let maxTrailLength = 8;
     
     p.setup = function() {
-        p.createCanvas(canvasWidth, canvasHeight);
+        parentEl = p.canvas ? p.canvas.parentElement : null;
+        if (!parentEl) {
+            canvasWidth = 700;
+            canvasHeight = 400;
+        } else {
+            canvasWidth = parentEl.offsetWidth || 700;
+            canvasHeight = parentEl.offsetHeight || 400;
+        }
+        let canvas = p.createCanvas(canvasWidth, canvasHeight);
+        canvas.style('display', 'block');
+        p.noFill();
+        p.strokeWeight(0.5);
+    };
+    
+    p.windowResized = function() {
+        if (parentEl) {
+            canvasWidth = parentEl.offsetWidth || 700;
+            canvasHeight = parentEl.offsetHeight || 400;
+            p.resizeCanvas(canvasWidth, canvasHeight);
+        }
     };
     
     p.draw = function() {
-        let data = hand === 'right' ? section.dataRight : section.dataLeft;
+        p.background(0);
         
-        if (data.length === 0) {
-            p.background(0);
-            p.fill(80);
-            p.textSize(12);
-            p.textAlign(p.CENTER, p.CENTER);
-            p.text('No data', canvasWidth / 2, canvasHeight / 2);
-            return;
+        // Magnitude view playback (with speed control)
+        if (section.magIsPlaying && section.dataRight.length > 0) {
+            let currentTime = Date.now();
+            let elapsedTime = (currentTime - section.playStartTime) * section.magPlaySpeed;
+            let dataStartMs = timestampToMs(section.dataRight[0].timestamp);
+            let targetTimeMs = dataStartMs + elapsedTime;
+            
+            // Find the frame that matches current playback time
+            let newIndex = section.currentIndex;
+            let maxLen = Math.max(section.dataRight.length, section.dataLeft.length);
+            for (let i = 0; i < maxLen; i++) {
+                let frameTimeMs = timestampToMs(section.dataRight[Math.min(i, section.dataRight.length - 1)].timestamp);
+                if (frameTimeMs <= targetTimeMs) {
+                    newIndex = i;
+                } else {
+                    break;
+                }
+            }
+            
+            // Process each skipped frame individually to maintain accurate brightness
+            if (newIndex !== section.currentIndex) {
+                let startIdx = section.currentIndex;
+                let endIdx = newIndex;
+                
+                // Process each frame one by one
+                for (let i = startIdx; i < endIdx; i++) {
+                    // Calculate brightness change for this single frame step
+                    updateMovementBrightnessForFrame(section, i, i + 1);
+                    
+                    // Apply decay for each frame (scaled by speed so decay feels the same)
+                    section.targetBrightnessRight *= 0.80;
+                    section.targetBrightnessLeft *= 0.80;
+                }
+                
+                section.currentIndex = newIndex;
+                updateMagnitudeTimeDisplay(section);
+            }
+            
+            // Loop back to start when finished
+            if (section.currentIndex >= maxLen - 1) {
+                section.currentIndex = 0;
+                section.playStartTime = Date.now();
+                // Reset brightness on loop
+                section.targetBrightnessRight = 0;
+                section.targetBrightnessLeft = 0;
+                section.currentBrightnessRight = 0;
+                section.currentBrightnessLeft = 0;
+            }
         }
         
-        // Get current frame data
-        let d = data[Math.min(section.currentIndex, data.length - 1)];
+        // Apply smooth lerp for visual brightness (independent of playback)
+        section.currentBrightnessRight = p.lerp(section.currentBrightnessRight, section.targetBrightnessRight, 0.15);
+        section.currentBrightnessLeft = p.lerp(section.currentBrightnessLeft, section.targetBrightnessLeft, 0.15);
         
-        // Calculate XYZ magnitude
-        let mag = Math.sqrt(d.orientX * d.orientX + d.orientY * d.orientY + d.orientZ * d.orientZ);
+        let centerY = p.height / 2;
+        // Position circles so they overlap in the center
+        let centerXRight = p.width * 0.35;
+        let centerXLeft = p.width * 0.65;
         
-        // Normalize to 0-255 (typical max around 370 for orientation)
-        let brightness = p.map(mag, 0, 400, 0, 255);
-        brightness = p.constrain(brightness, 0, 255);
+        // === RIGHT HAND ===
+        let brightnessRight = section.currentBrightnessRight || 0;
+        let targetCirclesRight = p.map(brightnessRight, 0, 255, 1, maxCircles);
+        targetCirclesRight = p.constrain(targetCirclesRight, 1, maxCircles);
+        currentCirclesRight = p.lerp(currentCirclesRight, targetCirclesRight, 0.2);
+        let numCirclesRight = Math.round(currentCirclesRight);
         
-        // Fill entire canvas with brightness
-        p.background(brightness);
+        // Add to trail history
+        if (p.frameCount % 2 === 0) {
+            trailHistoryRight.unshift(numCirclesRight);
+            if (trailHistoryRight.length > maxTrailLength) trailHistoryRight.pop();
+        }
+        
+        // === LEFT HAND ===
+        let brightnessLeft = section.currentBrightnessLeft || 0;
+        let targetCirclesLeft = p.map(brightnessLeft, 0, 255, 1, maxCircles);
+        targetCirclesLeft = p.constrain(targetCirclesLeft, 1, maxCircles);
+        currentCirclesLeft = p.lerp(currentCirclesLeft, targetCirclesLeft, 0.2);
+        let numCirclesLeft = Math.round(currentCirclesLeft);
+        
+        // Add to trail history
+        if (p.frameCount % 2 === 0) {
+            trailHistoryLeft.unshift(numCirclesLeft);
+            if (trailHistoryLeft.length > maxTrailLength) trailHistoryLeft.pop();
+        }
+        
+        // Draw afterimages for RIGHT hand (red)
+        p.noFill();
+        for (let t = trailHistoryRight.length - 1; t >= 1; t--) {
+            let trailCircles = trailHistoryRight[t];
+            let alpha = p.map(t, trailHistoryRight.length - 1, 0, 15, 150);
+            p.stroke(255, 80, 80, alpha); // Red
+            for (let i = 1; i <= trailCircles; i++) {
+                p.ellipse(centerXRight, centerY, i * circleSpacing * 2, i * circleSpacing * 2);
+            }
+        }
+        
+        // Draw afterimages for LEFT hand (blue)
+        for (let t = trailHistoryLeft.length - 1; t >= 1; t--) {
+            let trailCircles = trailHistoryLeft[t];
+            let alpha = p.map(t, trailHistoryLeft.length - 1, 0, 15, 150);
+            p.stroke(80, 150, 255, alpha); // Blue
+            for (let i = 1; i <= trailCircles; i++) {
+                p.ellipse(centerXLeft, centerY, i * circleSpacing * 2, i * circleSpacing * 2);
+            }
+        }
+        
+        // Draw current circles for RIGHT hand (red, outer circles fade, inner circles solid)
+        p.noFill();
+        for (let i = 1; i <= numCirclesRight; i++) {
+            // Outer 3 circles are semi-transparent, fading outward
+            let fromEnd = numCirclesRight - i; // 0 for outermost, increases inward
+            if (fromEnd < 10) {
+                let alpha = p.map(fromEnd, 0, 9, 20, 240); // outermost=80, 3rd from end=220
+                p.stroke(255, 80, 80, alpha); // Red
+            } else {
+                p.stroke(255, 80, 80); // Red
+            }
+            p.ellipse(centerXRight, centerY, i * circleSpacing * 2, i * circleSpacing * 2);
+        }
+        
+        // Draw current circles for LEFT hand (blue, outer circles fade, inner circles solid)
+        for (let i = 1; i <= numCirclesLeft; i++) {
+            let fromEnd = numCirclesLeft - i;
+            if (fromEnd < 10) {
+                let alpha = p.map(fromEnd, 0, 9, 20, 240);
+                p.stroke(80, 150, 255, alpha); // Blue
+            } else {
+                p.stroke(80, 150, 255); // Blue
+            }
+            p.ellipse(centerXLeft, centerY, i * circleSpacing * 2, i * circleSpacing * 2);
+        }
+        
+        // Draw center dots
+        p.fill(255, 80, 80); // Red for right
+        p.noStroke();
+        p.ellipse(centerXRight, centerY, 1, 1);
+        p.fill(80, 150, 255); // Blue for left
+        p.ellipse(centerXLeft, centerY, 1, 1);
         
         // Update info display
         let el = section.element;
         el.querySelector('.mag-frame-num').textContent = section.currentIndex;
-        if (hand === 'right') {
-            el.querySelector('.mag-r').textContent = mag.toFixed(2);
-        } else {
-            el.querySelector('.mag-l').textContent = mag.toFixed(2);
-        }
+        el.querySelector('.mag-r').textContent = brightnessRight.toFixed(0);
+        el.querySelector('.mag-l').textContent = brightnessLeft.toFixed(0);
     };
 }
 

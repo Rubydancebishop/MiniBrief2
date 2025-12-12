@@ -328,11 +328,15 @@ body {
 
 /* Section Pages */
 .section-page {
-    display: none;
+    display: none !important;
 }
 
 .section-page.active {
-    display: block;
+    display: block !important;
+}
+
+.section-page.magnitude-view.active {
+    display: flex !important;
 }
 
 /* Heatmap View (inside section) */
@@ -414,76 +418,122 @@ body {
     min-height: 16px;
 }
 
-/* Magnitude View (Page 2) */
-.magnitude-view .magnitude-title {
-    color: #888;
-    font-size: 12px;
-    font-weight: normal;
-    text-align: center;
-    margin-bottom: 10px;
-}
-
-.magnitude-view .magnitude-container {
+/* Magnitude View (Page 2) - Full Background Single Canvas */
+.magnitude-view {
     display: flex;
-    gap: 20px;
-    justify-content: center;
+    flex-direction: column;
+    height: 420px;
+    padding: 0 !important;
+    position: relative;
 }
 
-.magnitude-view .magnitude-panel {
+.magnitude-view .magnitude-canvas-single {
     flex: 1;
-    max-width: 320px;
-    background: #111;
-    border: 1px solid #444;
-    padding: 10px;
-}
-
-.magnitude-view .magnitude-panel h4 {
-    color: #888;
-    font-size: 11px;
-    font-weight: normal;
-    text-align: center;
-    margin-bottom: 8px;
-}
-
-.magnitude-view .magnitude-panel.magnitude-right h4 {
-    color: #64c8ff;
-}
-
-.magnitude-view .magnitude-panel.magnitude-left h4 {
-    color: #ffa064;
-}
-
-.magnitude-view .magnitude-canvas {
-    min-height: 300px;
+    width: 100%;
+    height: 100%;
     display: flex;
-    justify-content: center;
 }
 
-.magnitude-view .magnitude-info {
+.magnitude-view .magnitude-canvas-single canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Magnitude Controls */
+.magnitude-view .magnitude-controls {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
     display: flex;
-    justify-content: center;
-    gap: 20px;
-    margin-top: 10px;
-    font-size: 11px;
-    color: #888;
+    flex-direction: column;
+    gap: 4px;
+    background: rgba(0,0,0,0.7);
+    padding: 6px 10px;
+    border-radius: 4px;
+    z-index: 10;
 }
 
-.magnitude-view .mag-right-val { color: #64c8ff; }
-.magnitude-view .mag-left-val { color: #ffa064; }
+.magnitude-view .mag-playback {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
 
-.magnitude-view .magnitude-legend {
+.magnitude-view .mag-play-btn {
+    background: #222;
+    border: 1px solid #555;
+    color: #fff;
+    width: 22px;
+    height: 22px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    margin-top: 10px;
-    font-size: 10px;
-    color: #666;
 }
 
-.magnitude-view .mag-gradient {
+.magnitude-view .mag-play-btn:hover {
+    border-color: #888;
+    background: #333;
+}
+
+.magnitude-view .mag-timeline {
     width: 120px;
-    height: 12px;
-    background: linear-gradient(to right, #000, #fff);
-    border: 1px solid #444;
+    height: 4px;
+    cursor: pointer;
+    accent-color: #888;
+}
+
+.magnitude-view .mag-time {
+    color: #888;
+    font-size: 9px;
+    min-width: 32px;
+}
+
+.magnitude-view .mag-speed {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.magnitude-view .mag-speed-label {
+    color: #666;
+    font-size: 8px;
+}
+
+.magnitude-view .mag-speed-slider {
+    width: 50px;
+    height: 3px;
+    cursor: pointer;
+    accent-color: #888;
+}
+
+.magnitude-view .mag-speed-val {
+    color: #aaa;
+    font-size: 9px;
+    min-width: 24px;
+}
+
+.magnitude-view .magnitude-info {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    font-size: 12px;
+    color: #888;
+    background: rgba(0,0,0,0.7);
+    padding: 5px 15px;
+    border-radius: 3px;
+    z-index: 10;
+}
+
+.magnitude-view .mag-right-val { color: #ff5050; }
+.magnitude-view .mag-left-val { color: #5096ff; }
+
+.magnitude-view .magnitude-legend {
+    display: none;
 }
